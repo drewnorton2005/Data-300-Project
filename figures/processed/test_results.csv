@@ -1,0 +1,4 @@
+target,best_model,CV_RMSE,Test_RMSE,Test_MAE,Test_R2
+PER_next,Ridge,2.1181,1.7133,1.1738,0.8279
+PTS_next,Gradient Boosting,2.4043,2.2935,1.6366,0.8502
+WS_next,Ridge,1.3804,1.1365,0.7729,0.7336
