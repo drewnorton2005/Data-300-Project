@@ -4,9 +4,9 @@
 
 ---
 
-## Project Description
+## Overview
 
-NBA front offices spend hundreds of millions of dollars on player contracts, yet player salaries frequently don't reflect actual on-court production. This project builds a two-phase machine learning pipeline to answer one core question:
+NBA front offices spend hundreds of millions on player contracts, yet salaries frequently don't reflect actual on-court production. This project builds a two-phase machine learning pipeline to answer one core question:
 
 > **Which NBA players are undervalued or overvalued relative to their contracts?**
 
@@ -14,205 +14,212 @@ We scrape 10 years of NBA data from Basketball Reference (2015–2024), engineer
 
 ---
 
+## How to Run
+
+**Install dependencies:**
+```bash
+pip install requests beautifulsoup4 pandas numpy scikit-learn matplotlib seaborn tqdm
+```
+
+**Run notebooks in order — each one saves outputs the next one loads:**
+
+```
+01_data_collection.ipynb      →  data/processed/players_combined.csv
+02_feature_engineering.ipynb  →  data/processed/players_features.csv
+                                  data/processed/feature_config.json
+03_regression.ipynb           →  data/processed/player_predictions.csv
+                                  data/processed/cv_results.csv
+                                  models/best_*.pkl
+04_clustering.ipynb           →  data/processed/players_clustered.csv
+05_trade_value.ipynb          →  data/processed/trade_value_leaderboard.csv
+```
+
+> ⚠️ Notebook 01 takes ~45 minutes due to Basketball Reference rate limiting (4 second delay between requests). After the first run, all raw CSVs are cached and re-runs are instant.
+
+**Salary data:** BBRef salary scraping may fail. If it does, download `NBA Player Salaries` from Kaggle and place at `data/raw/salaries/kaggle_salaries.csv`. The notebook will load it automatically.
+
+---
+
+## Notebook Descriptions
+
+### 01 — Data Collection
+Scrapes Basketball Reference for seasons 2016–2024:
+- **Per-game stats:** PTS, REB, AST, STL, BLK, TOV, FG%, 3P%, FT%
+- **Advanced metrics:** PER, TS%, BPM, VORP, Win Shares, usage rates
+- **Salary data:** Contract values normalized as % of salary cap
+
+Cleaning decisions:
+- Players with fewer than 20 games excluded
+- Traded players: `TOT` rows kept, individual team stints dropped
+- Missing salaries imputed with league minimum ($1M)
+- Salary cap values hardcoded by season (2016: $70M → 2024: $136M)
+
+Output: `data/processed/players_combined.csv` (~5,000 rows, 35+ columns)
+
+---
+
+### 02 — Feature Engineering
+Builds all predictive signals from the combined dataset:
+
+| Feature Group | Examples |
+|---|---|
+| Lag features | `PER_lag1`, `BPM_lag1` — previous season values |
+| 3-year rolling mean | `PER_roll3_mean` — smoothed trend |
+| 3-year rolling std | `PER_roll3_std` — consistency signal |
+| Year-over-year delta | `PER_delta1` — improvement or decline |
+| Age curve | `age_sq`, `years_from_peak` (relative to age 27) |
+| Binary flag | `past_prime` (age > 30) |
+| Salary efficiency | `salary_pct_cap`, `dollars_per_PER` |
+
+**Train/test split:** Temporal — train on 2016–2022, test on 2023–2024. No random splitting to prevent data leakage.
+
+**Targets:** `PER_next`, `PTS_next`, `WS_next` — next season values created via `shift(-1)` per player.
+
+Output: `data/processed/players_features.csv`, `data/processed/feature_config.json`
+
+---
+
+### 03 — Regression Modeling
+Trains and compares 5 models per target using 5-fold cross-validation:
+
+| Model | Role |
+|---|---|
+| KNN Regressor | Baseline |
+| Linear Regression | Interpretable baseline |
+| Ridge Regression | Regularized baseline |
+| Random Forest | Ensemble, handles non-linearity |
+| Gradient Boosting | Primary — best expected RMSE |
+
+First compares lag1-only vs 3-year rolling feature sets. Best feature set selected by Gradient Boosting RMSE, then used for all models.
+
+Best model per target selected by CV RMSE, retrained on full training set, evaluated on held-out 2023–2024 test set.
+
+Figures produced: `model_comparison_rmse.png`, `model_comparison_r2.png`, `predicted_vs_actual.png`, `feature_importance.png`, `learning_curve.png`
+
+Output: `data/processed/player_predictions.csv`, `models/best_*.pkl`
+
+---
+
+### 04 — Player Archetype Clustering
+Clusters players into archetypes using 9 efficiency/rate statistics:
+
+```
+PER, TS%, BPM, VORP, ast%, reb%, blk%, stl%, tov%
+```
+
+Rate stats used instead of volume stats to avoid separating starters from bench players by minutes alone.
+
+**k selection:** Elbow method (WCSS) + silhouette scores tested for k=2–12. Default k=6 — adjust `K_FINAL` if your plots suggest otherwise.
+
+**Validation:** Hierarchical clustering (Ward linkage) run in parallel. Adjusted Rand Index measures agreement — ARI > 0.6 = strong structural agreement.
+
+**Archetypes:**
+
+| Archetype | Example Players | Key Stats |
+|---|---|---|
+| Elite Scorer | Luka, Trae, SGA | High PER, BPM, VORP |
+| 3-and-D Wing | Mikal Bridges, OG | High TS%, stl% |
+| Defensive Anchor | Gobert | High blk%, reb% |
+| Playmaking Guard | CP3, Tyus Jones | High ast% |
+| Stretch Big | KAT, Porzingis | High TS%, reb% |
+| Utility Bench | Role players | Below average across all |
+
+Figures produced: `clustering_k_selection.png`, `silhouette_analysis.png`, `pca_cluster_biplot.png`, `pca_loadings.png`, `archetype_radar.png`
+
+Output: `data/processed/players_clustered.csv`
+
+---
+
+### 05 — Trade Value Score & Leaderboard
+Combines predictions, salary, age, and archetype into a single score:
+
+```
+Trade Value = 0.45 × Projected Output Score
+            + 0.35 × Salary Efficiency Score
+            + 0.15 × Age Curve Factor
+            + 0.05 × Archetype Bonus
+```
+
+Rescaled to **[-100, 100]** — positive = undervalued, negative = overvalued.
+
+**Age curve multipliers:**
+
+| Age | Multiplier |
+|---|---|
+| ≤ 22 | 1.15× |
+| 23–24 | 1.10× |
+| 25–28 | 1.00× |
+| 29–30 | 0.93× |
+| 31–32 | 0.85× |
+| 33–34 | 0.75× |
+| 35+ | 0.60× |
+
+**Archetype bonus:** Defensive Anchors (+0.10) and 3-and-D Wings (+0.08) receive bonuses because defensive contributions are systematically undervalued in salary negotiations. Elite Scorers receive no bonus (market correctly values stars). Utility Bench receives a small penalty (-0.05).
+
+**Tiers:** Highly Undervalued / Undervalued / Fairly Valued / Overvalued / Highly Overvalued
+
+**Validation checks:**
+- Moderate positive correlation with VORP/BPM confirms score captures real production
+- Negative correlation with salary confirms cheap contracts score higher
+- Rookie/min contract players expected to dominate top 50
+- Aging stars on max deals expected to dominate bottom 50
+
+Figures produced: `trade_value_leaderboard.png`, `salary_vs_output.png`, `tv_by_archetype.png`, `age_vs_trade_value.png`, `tv_component_breakdown.png`, `tv_vs_vorp_validation.png`
+
+Output: `data/processed/trade_value_leaderboard.csv`
+
+---
+
 ## Repository Structure
 
 ```
-├── 01_data_collection.ipynb       # Scrape BBRef: per-game, advanced, salary data
-├── 02_feature_engineering.ipynb   # Lag features, rolling averages, age curves
-├── 03_regression.ipynb            # KNN, Linear, Random Forest, Gradient Boosting
-├── 04_clustering.ipynb            # K-Means archetypes + PCA visualization
-├── 05_trade_value.ipynb           # Trade Value Score + leaderboard
-├── figures/                       # All output plots (PNG)
+├── 01_data_collection.ipynb
+├── 02_feature_engineering.ipynb
+├── 03_regression.ipynb
+├── 04_clustering.ipynb
+├── 05_trade_value.ipynb
 ├── data/
 │   ├── raw/
-│   │   ├── per_game/              # One CSV per season
-│   │   ├── advanced/              # One CSV per season
-│   │   └── salaries/              # One CSV per season + Kaggle backup
-│   └── processed/                 # Intermediate and final CSVs
-├── models/                        # Saved .pkl model files (gitignored)
+│   │   ├── per_game/          ← one CSV per season from BBRef
+│   │   ├── advanced/          ← one CSV per season from BBRef
+│   │   └── salaries/          ← one CSV per season + kaggle backup
+│   └── processed/             ← intermediate and final outputs
+├── figures/                   ← all plots saved as PNG
+├── models/                    ← fitted .pkl files (gitignored)
 ├── requirements.txt
 └── .gitignore
 ```
 
 ---
 
-## How to Run
-
-Run notebooks **in order** — each one saves outputs that the next one loads.
-
-### 1. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Run notebooks in sequence
-```
-01_data_collection.ipynb      → produces data/processed/players_combined.csv
-02_feature_engineering.ipynb  → produces data/processed/players_features.csv
-03_regression.ipynb           → produces data/processed/player_predictions.csv
-04_clustering.ipynb           → produces data/processed/players_clustered.csv
-05_trade_value.ipynb          → produces data/processed/trade_value_leaderboard.csv
-```
-
-> **Note:** Notebook 01 takes ~45 minutes due to rate limiting on Basketball Reference (4 second delay between requests). After the first run, all raw CSVs are cached and subsequent runs are instant.
-
-
----
-
 ## Dataset
 
-**Source:** [Basketball Reference](https://www.basketball-reference.com) · Seasons 2015–2024
+**Source:** [Basketball Reference](https://www.basketball-reference.com) · Seasons 2016–2024
 
-| Table | Contents | Rows |
-|---|---|---|
-| Per-game stats | PTS, REB, AST, STL, BLK, FG%, 3P%, FT% | ~5,000 player-seasons |
-| Advanced stats | PER, BPM, VORP, TS%, Win Shares, usage rates | ~5,000 player-seasons |
-| Salary data | Contract value by season | ~4,500 player-seasons |
-| **Merged output** | All of the above | **~5,000 rows, 35+ columns** |
+**Salary cap by season:**
 
-**Cleaning decisions:**
-- Players with fewer than 20 games excluded (noise reduction)
-- Traded players: individual team stints kept, season-total rows dropped
-- Missing salaries imputed with league minimum
-- Salary normalized as % of that season's cap (accounts for cap growth 2015–2024)
-
-**Salary cap backup:** If BBRef salary scraping fails, download `NBA Player Salaries (1990-2023)` from Kaggle and place at `data/raw/salaries/kaggle_salaries.csv`
-
----
-
-## Methods
-
-### Phase 1 — Feature Engineering (Notebook 02)
-
-| Feature Group | Examples |
+| Season | Cap |
 |---|---|
-| Lag features | `PER_lag1`, `BPM_lag1`, `VORP_lag1` — previous season values |
-| Rolling averages | `PER_roll3_mean` — 3-season rolling average |
-| Year-over-year delta | `PER_delta1` — improvement or decline signal |
-| Age curve | `age_sq`, `years_from_peak` — polynomial age modeling |
-| Salary efficiency | `salary_pct_cap`, `dollars_per_PER` |
-
-**Prediction targets:** `PER_next`, `PTS_next`, `WS_next` (next season values via `shift(-1)`)
-
-**Train/test split:** Temporal — train on 2016–2022, test on 2023–2024 (no data leakage)
-
-### Phase 2 — Regression Models (Notebook 03)
-
-Four models trained and compared per target via 5-fold cross-validation:
-
-| Model | Role |
-|---|---|
-| KNN Regressor | Baseline |
-| Linear Regression / Ridge | Interpretable baseline |
-| Random Forest | Ensemble, handles non-linearity |
-| Gradient Boosting | Primary — best expected RMSE |
-
-Best model per target selected by CV RMSE and evaluated on the held-out 2023–2024 test set.
-
-### Phase 3 — Clustering (Notebook 04)
-
-K-Means clustering on 9 efficiency/rate statistics to discover player archetypes:
-
-| Archetype | Example Players | Defining Stats |
-|---|---|---|
-| Elite Scorer | Luka, Trae, SGA | High PER, BPM, VORP |
-| 3-and-D Wing | Mikal Bridges, OG | High TS%, stl_pct |
-| Defensive Anchor | Gobert | High blk_pct, reb_pct |
-| Playmaking Guard | CP3, Tyus Jones | High ast_pct |
-| Stretch Big | KAT, Porzingis | High TS%, reb_pct |
-| Utility Bench | Role players | Below-average across all |
-
-Optimal k selected via elbow method + silhouette scores. Validated with Hierarchical Clustering (Adjusted Rand Index).
-
-### Phase 4 — Trade Value Score (Notebook 05)
-
-```
-Trade Value = 0.45 × Projected Output Score
-            + 0.35 × Salary Efficiency
-            + 0.15 × Age Curve Factor
-            + 0.05 × Archetype Bonus
-```
-
-Rescaled to **[-100, 100]** where positive = undervalued, negative = overvalued.
-
-**Age curve factor:** Players aged ≤22 get a 1.15× premium (upside + cheap contract); players 34+ get a 0.60× discount (decline risk).
-
-**Archetype bonus:** Defensive Anchors (+0.10) and 3-and-D Wings (+0.08) receive bonuses because defensive contributions are systematically undervalued in salary negotiations.
-
----
-
-## Evaluation
-
-| Dimension | Method |
-|---|---|
-| Regression accuracy | 5-fold CV RMSE & MAE per target; final test set evaluation on 2023–2024 |
-| Clustering quality | Silhouette score, WCSS elbow method, Hierarchical ARI agreement |
-| Trade value validity | Correlation with VORP/BPM; rookie contract players in top 50 check; aging stars in bottom 50 check |
-
----
-
-## Figures
-
-All plots saved to `figures/` during notebook execution:
-
-| Figure | Notebook | Description |
-|---|---|---|
-| `age_curve.png` | 02 | Average PER by age — confirms non-linear peak |
-| `correlation_heatmap.png` | 02 | Feature–target correlation matrix |
-| `model_comparison_rmse.png` | 03 | CV RMSE across all models and targets |
-| `predicted_vs_actual.png` | 03 | Scatter of predictions vs holdout truth |
-| `feature_importance.png` | 03 | Top 15 features per target |
-| `learning_curve.png` | 03 | Bias-variance diagnosis |
-| `clustering_k_selection.png` | 04 | Elbow + silhouette plots |
-| `pca_cluster_biplot.png` | 04 | 2D archetype visualization |
-| `archetype_radar.png` | 04 | Radar chart of archetype stat profiles |
-| `trade_value_leaderboard.png` | 05 | Top 15 undervalued / bottom 15 overvalued |
-| `salary_vs_output.png` | 05 | Core insight: salary vs projected PER |
-| `age_vs_trade_value.png` | 05 | Where age creates biggest salary mismatches |
-| `tv_vs_vorp_validation.png` | 05 | Sanity check vs established metric |
-
----
-
-## Expected Findings
-
-**Undervalued players:**
-- Young players on rookie contracts performing above their salary tier
-- 3-and-D specialists whose defensive metrics aren't reflected in box scores
-- Players whose advanced metrics (BPM, VORP) outperform their visibility
-
-**Overvalued players:**
-- Aging stars on max contracts past their statistical peak
-- High-scorer, low-efficiency players paid for counting stats alone
-- Injury-prone veterans on long-term guaranteed deals
-
----
-
-## Requirements
-
-```
-requests
-beautifulsoup4
-pandas
-numpy
-scikit-learn
-matplotlib
-seaborn
-tqdm
-```
-
-Install with: `pip install -r requirements.txt`
+| 2016 | $70.0M |
+| 2017 | $94.1M |
+| 2018 | $99.1M |
+| 2019 | $101.9M |
+| 2020–2021 | $109.1M |
+| 2022 | $112.4M |
+| 2023 | $123.7M |
+| 2024 | $136.0M |
 
 ---
 
 ## Course Topics Covered
 
-- Supervised learning: regression (Linear, Ridge, Random Forest, Gradient Boosting)
-- Unsupervised learning: K-Means and Hierarchical clustering
-- Model evaluation: cross-validation, RMSE, MAE, R², silhouette score
-- Feature engineering: lag features, rolling averages, polynomial terms
-- Dimensionality reduction: PCA for visualization
-- Web scraping: BeautifulSoup, rate limiting, data cleaning
+- Supervised learning: KNN, Linear Regression, Ridge, Random Forest, Gradient Boosting
+- Unsupervised learning: K-Means clustering, Hierarchical clustering
+- Model evaluation: 5-fold CV, RMSE, MAE, R², silhouette score, Adjusted Rand Index
+- Feature engineering: lag features, rolling averages, polynomial age terms
+- Dimensionality reduction: PCA for cluster visualization
+- Web scraping: BeautifulSoup, rate limiting, HTML table parsing
 
 ---
 
-*Data source: Basketball Reference (2015–2024). Project completed for DATA 300, Spring 2026, Dickinson College.*
+*Data: Basketball Reference 2016–2024 · DATA 300 Spring 2026 · Dickinson College*
