@@ -1,0 +1,16 @@
+target,model,CV_RMSE,CV_MAE,CV_R2,CV_RMSE_std
+PER_next,KNN,2.4167,1.8152,0.7221,-0.086
+PER_next,Linear Regression,2.1186,1.4867,0.7859,-0.1014
+PER_next,Ridge,2.1181,1.4864,0.786,-0.1015
+PER_next,Random Forest,2.2112,1.554,0.767,-0.1083
+PER_next,Gradient Boosting,2.178,1.5329,0.7736,-0.1149
+PTS_next,KNN,2.7509,2.0505,0.7707,-0.0985
+PTS_next,Linear Regression,2.5218,1.856,0.8073,-0.058
+PTS_next,Ridge,2.5209,1.8553,0.8074,-0.0572
+PTS_next,Random Forest,2.4635,1.7797,0.8161,-0.0965
+PTS_next,Gradient Boosting,2.4043,1.7369,0.8249,-0.0788
+WS_next,KNN,1.4973,1.0562,0.5784,-0.0583
+WS_next,Linear Regression,1.3807,0.9443,0.6402,-0.0557
+WS_next,Ridge,1.3804,0.9441,0.6404,-0.0558
+WS_next,Random Forest,1.4126,0.9616,0.624,-0.0519
+WS_next,Gradient Boosting,1.4108,0.962,0.624,-0.0545
