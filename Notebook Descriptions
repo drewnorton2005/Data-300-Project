@@ -1,0 +1,11 @@
+📓 Notebook Summaries
+01_data_collection.ipynb
+Scrapes Basketball-Reference for per-game stats, advanced stats (PER, BPM, VORP, TS%), and salary data across all 9 seasons (2016–2024). Cleans everything — removes header rows, handles traded players, filters out players under 20 games, normalizes salary as % of cap. Saves one unified players_combined.csv. Has a Kaggle salary backup if scraping fails.
+02_feature_engineering.ipynb
+Turns raw stats into model-ready features. Builds two feature sets: lag1 (just previous season) and rolling 3-year (mean, std, and year-over-year delta). Adds age curve features (age², years from peak), salary efficiency ratios, and a composite performance index. Sets up the temporal train/test split (train 2016–2022, test 2023–2024). Saves players_features.csv and a feature_config.json so notebook 03 loads everything cleanly.
+03_regression.ipynb
+Trains 5 models — KNN, Linear Regression, Ridge, Random Forest, Gradient Boosting — separately for each of the 3 targets (PER, PTS, Win Shares). Auto-compares lag1 vs rolling features and picks the better set. Runs 5-fold cross-validation, then evaluates the best model per target on the held-out test set. Produces RMSE/R² comparison charts, predicted vs actual scatter plots, feature importance charts, and a learning curve. Saves predictions for all 2024 players to player_predictions.csv.
+04_clustering.ipynb
+Groups players into archetypes using K-Means. Finds optimal k via elbow method + silhouette score, fits the final model, and labels clusters by inspecting centroid averages. Validates with hierarchical clustering (Adjusted Rand Index). Produces a PCA biplot, per-sample silhouette chart, PCA feature loadings, and a 6-panel radar chart of archetype profiles. Saves players_clustered.csv.
+05_trade_value.ipynb
+The final notebook. Merges predictions (03) with cluster archetypes (04) and current salary/age data. Computes the Trade Value Score using four components: projected output (45%), salary efficiency (35%), age curve (15%), and archetype bonus (5%). Rescaled to [-100, 100]. Produces 6 figures including the leaderboard bar chart, salary vs output scatter, archetype box plots, age curve overlay, component breakdown, and a VORP validation scatter. Saves the final ranked leaderboard.
